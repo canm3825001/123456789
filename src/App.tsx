@@ -1,677 +1,663 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type SolveResult =
-  | { type: "not_quadratic_linear"; x: number | null; steps: Step[] }
-  | { type: "not_quadratic_degenerate"; steps: Step[] }
-  | { type: "two_roots"; x1: number; x2: number; delta: number; steps: Step[] }
-  | { type: "one_root"; x: number; delta: number; steps: Step[] }
-  | { type: "no_real_root"; delta: number; steps: Step[] };
+interface SolveResult {
+  a: number;
+  b: number;
+  c: number;
+  delta: number;
+  type: "two_roots" | "one_root" | "no_root" | "linear" | "identity" | "no_solution";
+  x1?: number;
+  x2?: number;
+  x?: number;
+  steps: Step[];
+}
 
 interface Step {
   title: string;
-  content: React.ReactNode;
+  content: string;
+  formula?: string;
+  highlight?: boolean;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function fmt(n: number, decimals = 4): string {
-  const r = parseFloat(n.toFixed(decimals));
-  return r.toString();
+function formatNum(n: number): string {
+  if (Number.isInteger(n)) return n.toString();
+  return parseFloat(n.toFixed(6)).toString();
 }
 
-function fmtCoeff(val: number): string {
-  return fmt(val);
-}
-
-/** Render equation string like ax² + bx + c = 0 */
-function equationStr(a: number, b: number, c: number): string {
-  const parts: string[] = [];
-
-  // a term
-  if (a === 1) parts.push("x²");
-  else if (a === -1) parts.push("-x²");
-  else parts.push(`${fmtCoeff(a)}x²`);
-
-  // b term
-  if (b !== 0) {
-    if (b === 1) parts.push("+ x");
-    else if (b === -1) parts.push("- x");
-    else if (b > 0) parts.push(`+ ${fmtCoeff(b)}x`);
-    else parts.push(`- ${fmtCoeff(Math.abs(b))}x`);
+function formatFrac(num: number, den: number): string {
+  if (den === 0) return "∞";
+  const result = num / den;
+  if (Number.isInteger(result)) return result.toString();
+  // simplify fraction
+  const gcd = (a: number, b: number): number => (b === 0 ? Math.abs(a) : gcd(b, a % b));
+  const g = gcd(Math.abs(Math.round(num)), Math.abs(Math.round(den)));
+  if (g > 0 && Number.isInteger(num) && Number.isInteger(den)) {
+    const n2 = num / g;
+    const d2 = den / g;
+    if (d2 < 0) return `${-n2}/${-d2}`;
+    return d2 === 1 ? `${n2}` : `${n2}/${d2}`;
   }
-
-  // c term
-  if (c !== 0) {
-    if (c > 0) parts.push(`+ ${fmtCoeff(c)}`);
-    else parts.push(`- ${fmtCoeff(Math.abs(c))}`);
-  }
-
-  return parts.join(" ") + " = 0";
+  return formatNum(result);
 }
 
-// ─── Solver ───────────────────────────────────────────────────────────────────
 function solve(a: number, b: number, c: number): SolveResult {
-  // Case: a = 0 (not quadratic)
-  if (a === 0) {
-    const steps: Step[] = [
-      {
-        title: "Nhận xét hệ số a",
-        content: (
-          <p>
-            Vì <span className="highlight-val">a = {fmt(a)}</span>, phương trình
-            không phải phương trình bậc hai. Đây là phương trình{" "}
-            <strong>bậc nhất</strong>: <span className="highlight-val">{fmt(b)}x + {fmt(c)} = 0</span>
-          </p>
-        ),
-      },
-    ];
-
-    if (b === 0) {
-      // 0x + c = 0
-      steps.push({
-        title: "Giải phương trình",
-        content:
-          c === 0 ? (
-            <p>
-              Ta có <span className="highlight-val">0 = 0</span> — phương trình{" "}
-              <strong>vô số nghiệm</strong> (mọi x đều là nghiệm).
-            </p>
-          ) : (
-            <p>
-              Ta có <span className="highlight-val">{fmt(c)} = 0</span> — phương trình{" "}
-              <strong>vô nghiệm</strong>.
-            </p>
-          ),
-      });
-      return { type: "not_quadratic_degenerate", steps };
-    }
-
-    // b ≠ 0
-    const x = -c / b;
-    steps.push({
-      title: "Giải phương trình bậc nhất",
-      content: (
-        <div className="space-y-1">
-          <p>
-            {fmt(b)}x = -{fmt(c)}
-          </p>
-          <p>
-            x = -{fmt(c)} / {fmt(b)} ={" "}
-            <span className="highlight-val">{fmt(x)}</span>
-          </p>
-        </div>
-      ),
-    });
-    return { type: "not_quadratic_linear", x, steps };
-  }
-
-  // Quadratic: a ≠ 0
   const steps: Step[] = [];
 
-  // Step 1: Identify
+  // Step 1: Identify equation
   steps.push({
-    title: "Xác định dạng phương trình",
-    content: (
-      <p>
-        Phương trình bậc hai dạng <strong>ax² + bx + c = 0</strong> với:
-        <br />
-        <span className="highlight-val">a = {fmt(a)}</span>,{" "}
-        <span className="highlight-val">b = {fmt(b)}</span>,{" "}
-        <span className="highlight-val">c = {fmt(c)}</span>
-      </p>
-    ),
+    title: "📌 Bước 1: Xác định phương trình",
+    content: `Phương trình có dạng: ax² + bx + c = 0`,
+    formula: `Với a = ${formatNum(a)}, b = ${formatNum(b)}, c = ${formatNum(c)}`,
   });
 
-  // Step 2: Special case b=0, c=0 → x²=0
-  if (b === 0 && c === 0) {
+  const eqStr = (() => {
+    const parts: string[] = [];
+    if (a !== 0) {
+      if (a === 1) parts.push("x²");
+      else if (a === -1) parts.push("-x²");
+      else parts.push(`${formatNum(a)}x²`);
+    }
+    if (b !== 0) {
+      if (b === 1) parts.push(parts.length ? "+ x" : "x");
+      else if (b === -1) parts.push(parts.length ? "- x" : "-x");
+      else if (b > 0) parts.push(parts.length ? `+ ${formatNum(b)}x` : `${formatNum(b)}x`);
+      else parts.push(parts.length ? `- ${formatNum(Math.abs(b))}x` : `${formatNum(b)}x`);
+    }
+    if (c !== 0) {
+      if (c > 0) parts.push(parts.length ? `+ ${formatNum(c)}` : `${formatNum(c)}`);
+      else parts.push(parts.length ? `- ${formatNum(Math.abs(c))}` : `${formatNum(c)}`);
+    }
+    return (parts.length ? parts.join(" ") : "0") + " = 0";
+  })();
+
+  steps[0].content = `Phương trình: ${eqStr}`;
+
+  // Case a = 0
+  if (a === 0) {
     steps.push({
-      title: "Trường hợp đặc biệt b = 0 và c = 0",
-      content: (
-        <p>
-          Phương trình trở thành{" "}
-          <span className="highlight-val">{fmt(a)}x² = 0</span> → x² = 0 →{" "}
-          <strong>x = 0</strong> (nghiệm kép).
-        </p>
-      ),
+      title: "⚠️ Lưu ý quan trọng",
+      content: `Vì a = 0, đây KHÔNG phải phương trình bậc hai!`,
+      highlight: true,
     });
-    return { type: "one_root", x: 0, delta: 0, steps };
+
+    if (b === 0) {
+      if (c === 0) {
+        steps.push({
+          title: "📐 Phân tích",
+          content: `b = 0, c = 0 → Phương trình trở thành: 0 = 0`,
+          formula: "Phương trình đúng với mọi x ∈ ℝ",
+        });
+        return { a, b, c, delta: 0, type: "identity", steps };
+      } else {
+        steps.push({
+          title: "📐 Phân tích",
+          content: `b = 0, c = ${formatNum(c)} → Phương trình trở thành: ${formatNum(c)} = 0`,
+          formula: "Phương trình vô nghiệm",
+        });
+        return { a, b, c, delta: 0, type: "no_solution", steps };
+      }
+    } else {
+      steps.push({
+        title: "📐 Giải phương trình bậc nhất",
+        content: `b = ${formatNum(b)}, c = ${formatNum(c)} → Phương trình trở thành: ${formatNum(b)}x + ${formatNum(c)} = 0`,
+        formula: `x = ${formatFrac(-c, b)} = ${formatNum(-c / b)}`,
+      });
+      return { a, b, c, delta: 0, type: "linear", x: -c / b, steps };
+    }
   }
 
-  // Step 3: Delta
+  // Step 2: Check condition
+  steps.push({
+    title: "✅ Bước 2: Kiểm tra điều kiện",
+    content: `Vì a = ${formatNum(a)} ≠ 0, đây là phương trình bậc hai thực sự.`,
+    formula: "Áp dụng công thức nghiệm tổng quát",
+  });
+
+  // Step 3: Calculate delta
   const delta = b * b - 4 * a * c;
   steps.push({
-    title: "Tính biệt thức Δ (Delta)",
-    content: (
-      <div className="space-y-2">
-        <p>
-          Công thức: <strong>Δ = b² − 4ac</strong>
-        </p>
-        <div className="formula-box">
-          Δ = ({fmt(b)})² − 4 × ({fmt(a)}) × ({fmt(c)})
-          <br />
-          Δ = {fmt(b * b)} − ({fmt(4 * a * c)})
-          <br />
-          Δ = <strong>{fmt(delta)}</strong>
-        </div>
-      </div>
-    ),
+    title: "🔢 Bước 3: Tính biệt thức Δ (Delta)",
+    content: `Công thức: Δ = b² - 4ac`,
+    formula: `Δ = (${formatNum(b)})² - 4 × (${formatNum(a)}) × (${formatNum(c)})
+    = ${formatNum(b * b)} - ${formatNum(4 * a * c)}
+    = ${formatNum(delta)}`,
+    highlight: true,
   });
 
   // Step 4: Analyze delta
   if (delta > 0) {
+    steps.push({
+      title: "📊 Bước 4: Phân tích biệt thức",
+      content: `Δ = ${formatNum(delta)} > 0`,
+      formula: "→ Phương trình có HAI nghiệm phân biệt",
+      highlight: true,
+    });
+
     const sqrtDelta = Math.sqrt(delta);
+    steps.push({
+      title: "📐 Bước 5: Tính căn bậc hai của Δ",
+      content: `√Δ = √${formatNum(delta)}`,
+      formula: `√Δ ≈ ${formatNum(sqrtDelta)}`,
+    });
+
     const x1 = (-b - sqrtDelta) / (2 * a);
     const x2 = (-b + sqrtDelta) / (2 * a);
 
     steps.push({
-      title: "Phân tích biệt thức",
-      content: (
-        <p>
-          Vì <span className="highlight-val">Δ = {fmt(delta)} &gt; 0</span>,
-          phương trình có <strong>hai nghiệm thực phân biệt</strong>.
-        </p>
-      ),
+      title: "🎯 Bước 6: Tính hai nghiệm",
+      content: `Áp dụng công thức nghiệm:`,
+      formula: `x₁ = (-b - √Δ) / (2a)
+    = (-(${formatNum(b)}) - ${formatNum(sqrtDelta)}) / (2 × ${formatNum(a)})
+    = (${formatNum(-b)} - ${formatNum(sqrtDelta)}) / ${formatNum(2 * a)}
+    = ${formatNum(-b - sqrtDelta)} / ${formatNum(2 * a)}
+    = ${formatNum(x1)}
+
+x₂ = (-b + √Δ) / (2a)
+    = (-(${formatNum(b)}) + ${formatNum(sqrtDelta)}) / (2 × ${formatNum(a)})
+    = (${formatNum(-b)} + ${formatNum(sqrtDelta)}) / ${formatNum(2 * a)}
+    = ${formatNum(-b + sqrtDelta)} / ${formatNum(2 * a)}
+    = ${formatNum(x2)}`,
+      highlight: true,
     });
 
     steps.push({
-      title: "Tính căn bậc hai của Δ",
-      content: (
-        <div className="formula-box">
-          √Δ = √{fmt(delta)} ≈ <strong>{fmt(sqrtDelta)}</strong>
-        </div>
-      ),
+      title: "🔍 Bước 7: Kiểm tra nghiệm",
+      content: `Thay x₁ = ${formatNum(x1)} vào phương trình:`,
+      formula: `f(${formatNum(x1)}) = ${formatNum(a)}×(${formatNum(x1)})² + ${formatNum(b)}×(${formatNum(x1)}) + ${formatNum(c)}
+    ≈ ${formatNum(a * x1 * x1 + b * x1 + c)} ✓
+
+Thay x₂ = ${formatNum(x2)} vào phương trình:
+f(${formatNum(x2)}) = ${formatNum(a)}×(${formatNum(x2)})² + ${formatNum(b)}×(${formatNum(x2)}) + ${formatNum(c)}
+    ≈ ${formatNum(a * x2 * x2 + b * x2 + c)} ✓`,
     });
 
     steps.push({
-      title: "Tính hai nghiệm x₁ và x₂",
-      content: (
-        <div className="space-y-3">
-          <p className="text-sm text-slate-500">Công thức nghiệm: x = (−b ± √Δ) / (2a)</p>
-          <div className="formula-box">
-            x₁ = (−b − √Δ) / (2a)
-            <br />
-            x₁ = (−({fmt(b)}) − {fmt(sqrtDelta)}) / (2 × {fmt(a)})
-            <br />
-            x₁ = ({fmt(-b)} − {fmt(sqrtDelta)}) / {fmt(2 * a)}
-            <br />
-            x₁ = {fmt(-b - sqrtDelta)} / {fmt(2 * a)}
-            <br />
-            <strong>x₁ ≈ {fmt(x1)}</strong>
-          </div>
-          <div className="formula-box">
-            x₂ = (−b + √Δ) / (2a)
-            <br />
-            x₂ = (−({fmt(b)}) + {fmt(sqrtDelta)}) / (2 × {fmt(a)})
-            <br />
-            x₂ = ({fmt(-b)} + {fmt(sqrtDelta)}) / {fmt(2 * a)}
-            <br />
-            x₂ = {fmt(-b + sqrtDelta)} / {fmt(2 * a)}
-            <br />
-            <strong>x₂ ≈ {fmt(x2)}</strong>
-          </div>
-        </div>
-      ),
+      title: "📋 Định lý Viète (kiểm tra thêm)",
+      content: `Theo định lý Viète:`,
+      formula: `x₁ + x₂ = -b/a = ${formatNum(-b)}/${formatNum(a)} = ${formatNum(-b / a)}
+Kiểm tra: ${formatNum(x1)} + ${formatNum(x2)} = ${formatNum(x1 + x2)} ✓
+
+x₁ × x₂ = c/a = ${formatNum(c)}/${formatNum(a)} = ${formatNum(c / a)}
+Kiểm tra: ${formatNum(x1)} × ${formatNum(x2)} = ${formatNum(x1 * x2)} ✓`,
     });
 
-    // Verification
+    return { a, b, c, delta, type: "two_roots", x1, x2, steps };
+  } else if (delta === 0) {
     steps.push({
-      title: "Kiểm tra nghiệm (thế lại vào phương trình)",
-      content: (
-        <div className="space-y-2 text-sm">
-          <div className="formula-box">
-            Thế x₁ = {fmt(x1)}:
-            <br />
-            {fmt(a)} × ({fmt(x1)})² + {fmt(b)} × ({fmt(x1)}) + {fmt(c)}
-            <br />≈ {fmt(a * x1 * x1 + b * x1 + c)} ✓
-          </div>
-          <div className="formula-box">
-            Thế x₂ = {fmt(x2)}:
-            <br />
-            {fmt(a)} × ({fmt(x2)})² + {fmt(b)} × ({fmt(x2)}) + {fmt(c)}
-            <br />≈ {fmt(a * x2 * x2 + b * x2 + c)} ✓
-          </div>
-        </div>
-      ),
+      title: "📊 Bước 4: Phân tích biệt thức",
+      content: `Δ = ${formatNum(delta)} = 0`,
+      formula: "→ Phương trình có NGHIỆM KÉP (hai nghiệm bằng nhau)",
+      highlight: true,
     });
 
-    // Vi-ét
-    steps.push({
-      title: "Định lý Vi-ét (kiểm tra nhanh)",
-      content: (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-slate-600">Theo định lý Vi-ét:</p>
-          <div className="formula-box">
-            x₁ + x₂ = −b/a = {fmt(-b / a)}
-            <br />
-            Kiểm tra: {fmt(x1)} + {fmt(x2)} = {fmt(x1 + x2)} ✓
-            <br />
-            <br />
-            x₁ × x₂ = c/a = {fmt(c / a)}
-            <br />
-            Kiểm tra: {fmt(x1)} × {fmt(x2)} = {fmt(x1 * x2)} ✓
-          </div>
-        </div>
-      ),
-    });
-
-    return { type: "two_roots", x1, x2, delta, steps };
-  }
-
-  if (delta === 0) {
     const x = -b / (2 * a);
     steps.push({
-      title: "Phân tích biệt thức",
-      content: (
-        <p>
-          Vì <span className="highlight-val">Δ = 0</span>, phương trình có{" "}
-          <strong>nghiệm kép</strong>.
-        </p>
-      ),
+      title: "🎯 Bước 5: Tính nghiệm kép",
+      content: `Áp dụng công thức nghiệm kép:`,
+      formula: `x₁ = x₂ = -b / (2a)
+    = -(${formatNum(b)}) / (2 × ${formatNum(a)})
+    = ${formatNum(-b)} / ${formatNum(2 * a)}
+    = ${formatNum(x)}`,
+      highlight: true,
     });
+
     steps.push({
-      title: "Tính nghiệm kép x₁ = x₂",
-      content: (
-        <div className="formula-box">
-          x₁ = x₂ = −b / (2a)
-          <br />
-          x₁ = x₂ = −({fmt(b)}) / (2 × {fmt(a)})
-          <br />
-          x₁ = x₂ = {fmt(-b)} / {fmt(2 * a)}
-          <br />
-          <strong>x₁ = x₂ = {fmt(x)}</strong>
-        </div>
-      ),
+      title: "🔍 Bước 6: Kiểm tra nghiệm",
+      content: `Thay x = ${formatNum(x)} vào phương trình:`,
+      formula: `f(${formatNum(x)}) = ${formatNum(a)}×(${formatNum(x)})² + ${formatNum(b)}×(${formatNum(x)}) + ${formatNum(c)}
+    ≈ ${formatNum(a * x * x + b * x + c)} ✓`,
     });
+
+    return { a, b, c, delta, type: "one_root", x1: x, x2: x, steps };
+  } else {
     steps.push({
-      title: "Kiểm tra nghiệm",
-      content: (
-        <div className="formula-box text-sm">
-          Thế x = {fmt(x)}:
-          <br />
-          {fmt(a)} × ({fmt(x)})² + {fmt(b)} × ({fmt(x)}) + {fmt(c)}
-          <br />≈ {fmt(a * x * x + b * x + c)} ✓
-        </div>
-      ),
+      title: "📊 Bước 4: Phân tích biệt thức",
+      content: `Δ = ${formatNum(delta)} < 0`,
+      formula: "→ Phương trình VÔ NGHIỆM thực (có nghiệm phức)",
+      highlight: true,
     });
-    return { type: "one_root", x, delta: 0, steps };
-  }
 
-  // delta < 0
-  const realPart = -b / (2 * a);
-  const imagPart = Math.sqrt(-delta) / (2 * Math.abs(a));
-  steps.push({
-    title: "Phân tích biệt thức",
-    content: (
-      <p>
-        Vì <span className="highlight-val">Δ = {fmt(delta)} &lt; 0</span>,
-        phương trình <strong>vô nghiệm thực</strong>. Phương trình có hai nghiệm{" "}
-        phức liên hợp.
-      </p>
-    ),
-  });
-  steps.push({
-    title: "Nghiệm phức (nâng cao)",
-    content: (
-      <div className="space-y-2">
-        <p className="text-sm text-slate-500">
-          Trong tập số phức ℂ, phương trình có hai nghiệm liên hợp:
-        </p>
-        <div className="formula-box">
-          x₁ = (−b − i√|Δ|) / (2a)
-          <br />
-          x₁ = {fmt(realPart)} − {fmt(imagPart)}i
-          <br />
-          <br />
-          x₂ = (−b + i√|Δ|) / (2a)
-          <br />
-          x₂ = {fmt(realPart)} + {fmt(imagPart)}i
-        </div>
-      </div>
-    ),
-  });
-  return { type: "no_real_root", delta, steps };
+    const realPart = -b / (2 * a);
+    const imagPart = Math.sqrt(-delta) / (2 * a);
+
+    steps.push({
+      title: "📐 Bước 5: Nghiệm phức (nâng cao)",
+      content: `Trong tập số phức ℂ, phương trình có hai nghiệm phức liên hợp:`,
+      formula: `x₁ = ${formatNum(realPart)} - ${formatNum(Math.abs(imagPart))}i
+x₂ = ${formatNum(realPart)} + ${formatNum(Math.abs(imagPart))}i`,
+    });
+
+    steps.push({
+      title: "❌ Kết luận",
+      content: `Phương trình vô nghiệm trong tập số thực ℝ`,
+      formula: `Vì Δ = ${formatNum(delta)} < 0, không tồn tại số thực nào thỏa mãn phương trình`,
+      highlight: true,
+    });
+
+    return { a, b, c, delta, type: "no_root", steps };
+  }
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-function StepCard({
-  index,
-  title,
-  content,
-}: {
-  index: number;
-  title: string;
-  content: React.ReactNode;
-}) {
-  return (
-    <div
-      className="animate-fadeInUp flex gap-4"
-      style={{ animationDelay: `${index * 80}ms` }}
-    >
-      {/* Number badge */}
-      <div className="flex-shrink-0 w-9 h-9 rounded-full bg-indigo-500 text-white flex items-center justify-center font-bold text-sm shadow-md mt-0.5">
-        {index}
-      </div>
-      {/* Content */}
-      <div className="flex-1 bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="font-semibold text-slate-700 mb-2">{title}</p>
-        <div className="text-slate-600 text-sm leading-relaxed">{content}</div>
-      </div>
-    </div>
-  );
-}
-
-function ResultBadge({ result }: { result: SolveResult }) {
-  if (result.type === "two_roots") {
-    return (
-      <div className="result-delta-positive rounded-2xl p-5 animate-scaleIn">
-        <p className="text-green-700 font-bold text-lg mb-3 flex items-center gap-2">
-          <span>✅</span> Phương trình có hai nghiệm thực phân biệt
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white rounded-xl p-3 text-center shadow-sm border border-green-100">
-            <p className="text-xs text-slate-400 mb-1">Nghiệm x₁</p>
-            <p className="mono text-2xl font-bold text-indigo-600">{fmt(result.x1)}</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 text-center shadow-sm border border-green-100">
-            <p className="text-xs text-slate-400 mb-1">Nghiệm x₂</p>
-            <p className="mono text-2xl font-bold text-purple-600">{fmt(result.x2)}</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (result.type === "one_root") {
-    return (
-      <div className="result-delta-zero rounded-2xl p-5 animate-scaleIn">
-        <p className="text-yellow-700 font-bold text-lg mb-3 flex items-center gap-2">
-          <span>🔁</span> Phương trình có nghiệm kép
-        </p>
-        <div className="bg-white rounded-xl p-3 text-center shadow-sm border border-yellow-100">
-          <p className="text-xs text-slate-400 mb-1">Nghiệm kép x₁ = x₂</p>
-          <p className="mono text-2xl font-bold text-amber-600">{fmt(result.x)}</p>
-        </div>
-      </div>
-    );
-  }
-  if (result.type === "no_real_root") {
-    return (
-      <div className="result-delta-negative rounded-2xl p-5 animate-scaleIn">
-        <p className="text-red-700 font-bold text-lg flex items-center gap-2">
-          <span>❌</span> Phương trình vô nghiệm thực (Δ &lt; 0)
-        </p>
-        <p className="text-red-500 text-sm mt-1">
-          Phương trình không có nghiệm trong tập số thực ℝ.
-        </p>
-      </div>
-    );
-  }
-  if (result.type === "not_quadratic_linear") {
-    return (
-      <div className="result-a-zero rounded-2xl p-5 animate-scaleIn">
-        <p className="text-blue-700 font-bold text-lg mb-3 flex items-center gap-2">
-          <span>📐</span> Phương trình bậc nhất (a = 0)
-        </p>
-        {result.x !== null ? (
-          <div className="bg-white rounded-xl p-3 text-center shadow-sm border border-blue-100">
-            <p className="text-xs text-slate-400 mb-1">Nghiệm x</p>
-            <p className="mono text-2xl font-bold text-blue-600">{fmt(result.x)}</p>
-          </div>
-        ) : (
-          <p className="text-blue-500 text-sm">Phương trình vô nghiệm (b = 0, c ≠ 0).</p>
-        )}
-      </div>
-    );
-  }
-  // degenerate
-  return (
-    <div className="result-a-zero rounded-2xl p-5 animate-scaleIn">
-      <p className="text-blue-700 font-bold text-lg flex items-center gap-2">
-        <span>♾️</span> Phương trình đặc biệt (a = 0, b = 0)
-      </p>
-    </div>
-  );
-}
-
-// ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [inputs, setInputs] = useState({ a: "", b: "", c: "" });
+  const [inputA, setInputA] = useState("");
+  const [inputB, setInputB] = useState("");
+  const [inputC, setInputC] = useState("");
   const [result, setResult] = useState<SolveResult | null>(null);
-  const [error, setError] = useState<string>("");
-  const [equation, setEquation] = useState<string>("");
+  const [errors, setErrors] = useState<{ a?: string; b?: string; c?: string }>({});
+  const [animating, setAnimating] = useState(false);
 
-  const handleChange = useCallback(
-    (field: "a" | "b" | "c") =>
-      (e: React.ChangeEvent<HTMLInputElement>) => {
-        setInputs((prev) => ({ ...prev, [field]: e.target.value }));
-        setError("");
-      },
-    []
-  );
+  const handleSolve = () => {
+    const newErrors: { a?: string; b?: string; c?: string } = {};
+    if (inputA === "" || isNaN(Number(inputA))) newErrors.a = "Vui lòng nhập số hợp lệ";
+    if (inputB === "" || isNaN(Number(inputB))) newErrors.b = "Vui lòng nhập số hợp lệ";
+    if (inputC === "" || isNaN(Number(inputC))) newErrors.c = "Vui lòng nhập số hợp lệ";
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
 
-  const handleSolve = useCallback(() => {
-    const a = parseFloat(inputs.a);
-    const b = parseFloat(inputs.b);
-    const c = parseFloat(inputs.c);
+    const a = parseFloat(inputA);
+    const b = parseFloat(inputB);
+    const c = parseFloat(inputC);
 
-    if (inputs.a.trim() === "" || isNaN(a)) {
-      setError("Vui lòng nhập hệ số a hợp lệ.");
-      return;
-    }
-    if (inputs.b.trim() === "" || isNaN(b)) {
-      setError("Vui lòng nhập hệ số b hợp lệ.");
-      return;
-    }
-    if (inputs.c.trim() === "" || isNaN(c)) {
-      setError("Vui lòng nhập hệ số c hợp lệ.");
-      return;
-    }
-
-    setError("");
-    setEquation(equationStr(a, b, c));
-    setResult(solve(a, b, c));
-  }, [inputs]);
-
-  const handleReset = useCallback(() => {
-    setInputs({ a: "", b: "", c: "" });
+    setAnimating(true);
     setResult(null);
-    setError("");
-    setEquation("");
-  }, []);
+    setTimeout(() => {
+      setResult(solve(a, b, c));
+      setAnimating(false);
+    }, 400);
+  };
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter") handleSolve();
-    },
-    [handleSolve]
-  );
+  const handleReset = () => {
+    setInputA("");
+    setInputB("");
+    setInputC("");
+    setResult(null);
+    setErrors({});
+  };
+
+  const handleExample = (a: string, b: string, c: string) => {
+    setInputA(a);
+    setInputB(b);
+    setInputC(c);
+    setResult(null);
+    setErrors({});
+  };
+
+  const getEquationDisplay = () => {
+    const a = parseFloat(inputA) || 0;
+    const b = parseFloat(inputB) || 0;
+    const c = parseFloat(inputC) || 0;
+    const parts: string[] = [];
+
+    if (inputA !== "") {
+      if (a === 1) parts.push("x²");
+      else if (a === -1) parts.push("-x²");
+      else parts.push(`${formatNum(a)}x²`);
+    } else {
+      parts.push("ax²");
+    }
+
+    if (inputB !== "") {
+      if (b === 1) parts.push("+ x");
+      else if (b === -1) parts.push("- x");
+      else if (b >= 0) parts.push(`+ ${formatNum(b)}x`);
+      else parts.push(`- ${formatNum(Math.abs(b))}x`);
+    } else {
+      parts.push("+ bx");
+    }
+
+    if (inputC !== "") {
+      if (c >= 0) parts.push(`+ ${formatNum(c)}`);
+      else parts.push(`- ${formatNum(Math.abs(c))}`);
+    } else {
+      parts.push("+ c");
+    }
+
+    return parts.join(" ") + " = 0";
+  };
+
+  const resultColor = result
+    ? result.type === "two_roots"
+      ? "from-green-500 to-emerald-600"
+      : result.type === "one_root"
+      ? "from-blue-500 to-cyan-600"
+      : result.type === "linear"
+      ? "from-purple-500 to-violet-600"
+      : result.type === "identity"
+      ? "from-yellow-500 to-orange-500"
+      : "from-red-500 to-rose-600"
+    : "from-indigo-500 to-purple-600";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-purple-950 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-950 to-indigo-950 text-white">
       {/* Header */}
-      <header className="text-center pt-10 pb-4 px-4 animate-fadeIn">
-        <div className="inline-flex items-center gap-3 mb-3">
-          <span className="text-4xl">🧮</span>
-          <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-            Giải Phương Trình Bậc Hai
-          </h1>
-        </div>
-        <p className="text-indigo-300 text-base md:text-lg max-w-xl mx-auto">
-          Nhập hệ số <strong>a</strong>, <strong>b</strong>, <strong>c</strong>{" "}
-          — nhận ngay lời giải chi tiết từng bước!
-        </p>
-        <div className="mt-3 inline-block bg-white/10 text-white/80 text-sm font-mono rounded-full px-5 py-1.5 border border-white/20">
-          ax² + bx + c = 0
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="flex-1 max-w-2xl w-full mx-auto px-4 pb-16 pt-6 flex flex-col gap-6">
-        {/* Input card */}
-        <div className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl p-6 md:p-8 animate-fadeInUp">
-          <h2 className="text-slate-700 font-bold text-lg mb-5 flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-base">
-              ✏️
+      <div className="relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-purple-600/20 to-indigo-600/20" />
+        <div className="relative max-w-4xl mx-auto px-4 py-10 text-center">
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-yellow-400 to-orange-500 shadow-2xl shadow-orange-500/30 mb-6">
+            <span className="text-4xl">🔢</span>
+          </div>
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-3">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-orange-300 to-pink-300">
+              Giải Phương Trình Bậc Hai
             </span>
+          </h1>
+          <p className="text-slate-400 text-lg font-medium">
+            ax² + bx + c = 0 — Hướng dẫn giải chi tiết từng bước
+          </p>
+          <div className="flex flex-wrap justify-center gap-2 mt-4">
+            <span className="px-3 py-1 rounded-full bg-purple-800/60 text-purple-200 text-sm border border-purple-700/50">
+              📐 Phương pháp Delta
+            </span>
+            <span className="px-3 py-1 rounded-full bg-indigo-800/60 text-indigo-200 text-sm border border-indigo-700/50">
+              🔍 Kiểm tra nghiệm
+            </span>
+            <span className="px-3 py-1 rounded-full bg-blue-800/60 text-blue-200 text-sm border border-blue-700/50">
+              📋 Định lý Viète
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 pb-16 space-y-6">
+        {/* Input Card */}
+        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-3xl p-8 shadow-2xl">
+          <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+            <span className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-sm">✏️</span>
             Nhập hệ số phương trình
           </h2>
 
-          {/* Coefficients */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            {(["a", "b", "c"] as const).map((field) => (
-              <div key={field} className="flex flex-col gap-2">
-                <label className="text-center text-sm font-semibold text-slate-500 uppercase tracking-widest">
-                  Hệ số{" "}
-                  <span className="text-indigo-500 text-base font-bold italic">
-                    {field}
-                  </span>
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  value={inputs[field]}
-                  onChange={handleChange(field)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={field === "a" ? "≠ 0" : "0"}
-                  className="input-field"
-                  aria-label={`Hệ số ${field}`}
-                />
-              </div>
-            ))}
+          {/* Live equation display */}
+          <div className="bg-gradient-to-r from-purple-900/50 to-indigo-900/50 border border-purple-500/30 rounded-2xl p-4 mb-6 text-center">
+            <p className="text-xs text-purple-300 mb-1 font-medium">PHƯƠNG TRÌNH ĐANG NHẬP</p>
+            <p className="text-2xl font-mono font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-orange-300">
+              {getEquationDisplay()}
+            </p>
           </div>
 
-          {/* Preview equation */}
-          {(inputs.a || inputs.b || inputs.c) && (
-            <div className="mb-5 bg-indigo-50 rounded-xl px-4 py-3 text-center border border-indigo-100 animate-fadeIn">
-              <p className="text-xs text-indigo-400 mb-1 uppercase tracking-wider font-medium">
-                Xem trước phương trình
-              </p>
-              <p className="mono font-bold text-indigo-700 text-base">
-                {(() => {
-                  const a = parseFloat(inputs.a) || 0;
-                  const b = parseFloat(inputs.b) || 0;
-                  const c = parseFloat(inputs.c) || 0;
-                  try {
-                    return equationStr(a, b, c);
-                  } catch {
-                    return "...";
-                  }
-                })()}
-              </p>
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            {/* Input A */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                <span className="w-6 h-6 rounded-lg bg-purple-600 flex items-center justify-center text-xs font-bold">a</span>
+                Hệ số a
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={inputA}
+                  onChange={(e) => { setInputA(e.target.value); setErrors(prev => ({ ...prev, a: undefined })); }}
+                  placeholder="Nhập a..."
+                  className={`w-full bg-slate-800/80 border-2 rounded-xl px-4 py-3 text-white font-mono text-lg text-center outline-none transition-all focus:bg-slate-700/80 ${
+                    errors.a ? "border-red-500 focus:border-red-400" : "border-slate-600 focus:border-purple-500"
+                  }`}
+                  onKeyDown={(e) => e.key === "Enter" && handleSolve()}
+                />
+                {errors.a && <p className="text-red-400 text-xs mt-1 text-center">{errors.a}</p>}
+              </div>
             </div>
-          )}
 
-          {/* Error */}
-          {error && (
-            <div className="mb-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-600 text-sm font-medium animate-fadeIn flex items-center gap-2">
-              <span>⚠️</span> {error}
+            {/* Input B */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                <span className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center text-xs font-bold">b</span>
+                Hệ số b
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={inputB}
+                  onChange={(e) => { setInputB(e.target.value); setErrors(prev => ({ ...prev, b: undefined })); }}
+                  placeholder="Nhập b..."
+                  className={`w-full bg-slate-800/80 border-2 rounded-xl px-4 py-3 text-white font-mono text-lg text-center outline-none transition-all focus:bg-slate-700/80 ${
+                    errors.b ? "border-red-500 focus:border-red-400" : "border-slate-600 focus:border-indigo-500"
+                  }`}
+                  onKeyDown={(e) => e.key === "Enter" && handleSolve()}
+                />
+                {errors.b && <p className="text-red-400 text-xs mt-1 text-center">{errors.b}</p>}
+              </div>
             </div>
-          )}
+
+            {/* Input C */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                <span className="w-6 h-6 rounded-lg bg-blue-600 flex items-center justify-center text-xs font-bold">c</span>
+                Hệ số c
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={inputC}
+                  onChange={(e) => { setInputC(e.target.value); setErrors(prev => ({ ...prev, c: undefined })); }}
+                  placeholder="Nhập c..."
+                  className={`w-full bg-slate-800/80 border-2 rounded-xl px-4 py-3 text-white font-mono text-lg text-center outline-none transition-all focus:bg-slate-700/80 ${
+                    errors.c ? "border-red-500 focus:border-red-400" : "border-slate-600 focus:border-blue-500"
+                  }`}
+                  onKeyDown={(e) => e.key === "Enter" && handleSolve()}
+                />
+                {errors.c && <p className="text-red-400 text-xs mt-1 text-center">{errors.c}</p>}
+              </div>
+            </div>
+          </div>
 
           {/* Buttons */}
           <div className="flex gap-3">
-            <button onClick={handleSolve} className="btn-solve flex-1">
-              ⚡ Giải Ngay
+            <button
+              onClick={handleSolve}
+              className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 font-bold text-lg text-white shadow-lg shadow-purple-900/50 transition-all hover:scale-[1.02] hover:shadow-purple-700/50 active:scale-[0.98]"
+            >
+              🚀 GIẢI PHƯƠNG TRÌNH
             </button>
             <button
               onClick={handleReset}
-              className="px-5 py-4 rounded-2xl border-2 border-slate-200 text-slate-500 font-semibold hover:border-slate-300 hover:bg-slate-50 active:scale-95 transition-all duration-200"
-              aria-label="Làm mới"
+              className="px-6 py-4 rounded-2xl bg-slate-700/80 hover:bg-slate-600/80 font-bold text-slate-200 transition-all hover:scale-[1.02] active:scale-[0.98] border border-slate-600"
             >
-              🔄
+              🔄 Xóa
             </button>
           </div>
         </div>
 
-        {/* Result card */}
-        {result && (
-          <div className="bg-white/95 backdrop-blur rounded-3xl shadow-2xl p-6 md:p-8 animate-fadeInUp">
-            {/* Equation header */}
-            <div className="mb-5 flex flex-col items-start gap-1">
-              <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-                Phương trình cần giải
-              </span>
-              <div className="mono font-bold text-indigo-700 text-lg bg-indigo-50 rounded-xl px-4 py-2 border border-indigo-100">
-                {equation}
-              </div>
-            </div>
+        {/* Examples */}
+        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-3xl p-6 shadow-xl">
+          <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">💡 Ví dụ mẫu (click để thử)</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { a: "1", b: "-5", c: "6", label: "x² - 5x + 6 = 0", desc: "Δ > 0" },
+              { a: "1", b: "-2", c: "1", label: "x² - 2x + 1 = 0", desc: "Δ = 0" },
+              { a: "1", b: "2", c: "5", label: "x² + 2x + 5 = 0", desc: "Δ < 0" },
+              { a: "2", b: "-3", c: "-2", label: "2x² - 3x - 2 = 0", desc: "Δ > 0" },
+            ].map((ex, i) => (
+              <button
+                key={i}
+                onClick={() => handleExample(ex.a, ex.b, ex.c)}
+                className="p-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-purple-600 transition-all hover:scale-[1.02] text-left group"
+              >
+                <p className="font-mono text-xs text-slate-300 group-hover:text-white transition-colors">{ex.label}</p>
+                <span className={`text-xs font-semibold mt-1 inline-block ${
+                  ex.desc === "Δ > 0" ? "text-green-400" : ex.desc === "Δ = 0" ? "text-blue-400" : "text-red-400"
+                }`}>{ex.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-            {/* Result badge */}
-            <div className="mb-6">
-              <ResultBadge result={result} />
-            </div>
-
-            {/* Steps */}
-            <div>
-              <h3 className="font-bold text-slate-700 text-base mb-4 flex items-center gap-2">
-                <span className="w-7 h-7 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center text-sm">
-                  📖
-                </span>
-                Hướng dẫn giải chi tiết
-              </h3>
-              <div className="flex flex-col gap-4">
-                {result.steps.map((step, i) => (
-                  <StepCard
+        {/* Loading */}
+        {animating && (
+          <div className="text-center py-8">
+            <div className="inline-flex flex-col items-center gap-3">
+              <div className="flex gap-2">
+                {[0, 1, 2].map((i) => (
+                  <div
                     key={i}
-                    index={i + 1}
-                    title={step.title}
-                    content={step.content}
+                    className="w-3 h-3 rounded-full bg-purple-400"
+                    style={{ animation: `bounce 0.8s ease-in-out ${i * 0.15}s infinite alternate` }}
                   />
                 ))}
               </div>
+              <p className="text-slate-400">Đang tính toán...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Result */}
+        {result && !animating && (
+          <div className="space-y-4">
+            {/* Result Summary */}
+            <div className={`bg-gradient-to-r ${resultColor} rounded-3xl p-6 shadow-2xl`}>
+              <h2 className="text-xl font-black text-white mb-4 flex items-center gap-2">
+                <span>🏆</span> KẾT QUẢ
+              </h2>
+
+              {result.type === "two_roots" && (
+                <div className="space-y-3">
+                  <p className="text-white/90 font-semibold">Phương trình có hai nghiệm phân biệt (Δ = {formatNum(result.delta)} &gt; 0):</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                      <p className="text-white/70 text-sm mb-1">Nghiệm x₁</p>
+                      <p className="text-3xl font-black text-white font-mono">{formatNum(result.x1!)}</p>
+                    </div>
+                    <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                      <p className="text-white/70 text-sm mb-1">Nghiệm x₂</p>
+                      <p className="text-3xl font-black text-white font-mono">{formatNum(result.x2!)}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {result.type === "one_root" && (
+                <div className="space-y-3">
+                  <p className="text-white/90 font-semibold">Phương trình có nghiệm kép (Δ = 0):</p>
+                  <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                    <p className="text-white/70 text-sm mb-1">Nghiệm kép x₁ = x₂</p>
+                    <p className="text-3xl font-black text-white font-mono">{formatNum(result.x1!)}</p>
+                  </div>
+                </div>
+              )}
+
+              {result.type === "no_root" && (
+                <div className="space-y-2">
+                  <p className="text-white/90 font-semibold">Phương trình vô nghiệm trong ℝ (Δ = {formatNum(result.delta)} &lt; 0)</p>
+                  <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                    <p className="text-4xl font-black text-white">∅</p>
+                    <p className="text-white/80 text-sm mt-1">Tập nghiệm rỗng</p>
+                  </div>
+                </div>
+              )}
+
+              {result.type === "linear" && (
+                <div className="space-y-2">
+                  <p className="text-white/90 font-semibold">Phương trình bậc nhất (a = 0):</p>
+                  <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                    <p className="text-white/70 text-sm mb-1">Nghiệm duy nhất</p>
+                    <p className="text-3xl font-black text-white font-mono">x = {formatNum(result.x!)}</p>
+                  </div>
+                </div>
+              )}
+
+              {result.type === "identity" && (
+                <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                  <p className="text-2xl font-black text-white">x ∈ ℝ</p>
+                  <p className="text-white/80 text-sm mt-1">Đúng với mọi số thực</p>
+                </div>
+              )}
+
+              {result.type === "no_solution" && (
+                <div className="bg-white/20 rounded-2xl p-4 text-center backdrop-blur-sm">
+                  <p className="text-4xl font-black text-white">∅</p>
+                  <p className="text-white/80 text-sm mt-1">Phương trình vô nghiệm</p>
+                </div>
+              )}
             </div>
 
-            {/* Theory note */}
-            <div className="mt-6 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-2xl p-4 border border-purple-100 animate-fadeIn">
-              <p className="font-semibold text-purple-700 text-sm mb-2 flex items-center gap-1">
-                📌 Tóm tắt lý thuyết
-              </p>
-              <div className="text-slate-600 text-xs leading-relaxed space-y-1">
-                <p>• Phương trình bậc hai: <strong>ax² + bx + c = 0</strong> (a ≠ 0)</p>
-                <p>• Biệt thức: <strong>Δ = b² − 4ac</strong></p>
-                <p>• Δ &gt; 0 → Hai nghiệm phân biệt: x = (−b ± √Δ) / 2a</p>
-                <p>• Δ = 0 → Nghiệm kép: x = −b / 2a</p>
-                <p>• Δ &lt; 0 → Vô nghiệm thực</p>
-                <p>• Định lý Vi-ét: x₁ + x₂ = −b/a &nbsp;|&nbsp; x₁ × x₂ = c/a</p>
+            {/* Step by step */}
+            <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-3xl p-6 shadow-xl">
+              <h2 className="text-xl font-bold text-white mb-5 flex items-center gap-2">
+                <span className="w-8 h-8 rounded-xl bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center text-sm">📖</span>
+                Hướng dẫn giải chi tiết
+              </h2>
+
+              <div className="space-y-4">
+                {result.steps.map((step, index) => (
+                  <div
+                    key={index}
+                    className={`rounded-2xl p-5 border transition-all ${
+                      step.highlight
+                        ? "bg-purple-900/40 border-purple-500/50 shadow-lg shadow-purple-900/20"
+                        : "bg-slate-800/50 border-slate-700/50"
+                    }`}
+                  >
+                    <h3 className={`font-bold text-base mb-2 ${step.highlight ? "text-yellow-300" : "text-slate-200"}`}>
+                      {step.title}
+                    </h3>
+                    <p className={`text-sm mb-2 ${step.highlight ? "text-purple-200" : "text-slate-400"}`}>
+                      {step.content}
+                    </p>
+                    {step.formula && (
+                      <div className={`rounded-xl p-3 font-mono text-sm whitespace-pre-line ${
+                        step.highlight
+                          ? "bg-purple-950/60 text-yellow-200 border border-purple-600/40"
+                          : "bg-slate-900/60 text-green-300 border border-slate-600/40"
+                      }`}>
+                        {step.formula}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         )}
 
-        {/* Examples */}
-        {!result && (
-          <div className="bg-white/10 backdrop-blur rounded-2xl p-5 border border-white/10 animate-fadeIn">
-            <p className="text-white/70 text-sm font-semibold mb-3 flex items-center gap-2">
-              💡 Thử với các ví dụ mẫu:
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {[
-                { label: "Δ > 0", a: "1", b: "-5", c: "6", desc: "x² − 5x + 6 = 0" },
-                { label: "Δ = 0", a: "1", b: "-4", c: "4", desc: "x² − 4x + 4 = 0" },
-                { label: "Δ < 0", a: "1", b: "2", c: "5", desc: "x² + 2x + 5 = 0" },
-              ].map((ex) => (
-                <button
-                  key={ex.label}
-                  onClick={() => {
-                    setInputs({ a: ex.a, b: ex.b, c: ex.c });
-                    setError("");
-                    setResult(null);
-                  }}
-                  className="bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-xl px-3 py-2.5 text-left transition-all duration-150 active:scale-95"
-                >
-                  <span className="text-xs text-indigo-300 font-bold">{ex.label}</span>
-                  <br />
-                  <span className="mono text-sm">{ex.desc}</span>
-                </button>
-              ))}
+        {/* Formula Reference */}
+        <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-3xl p-6 shadow-xl">
+          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <span>📚</span> Công thức tham khảo
+          </h3>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-slate-800/60 rounded-2xl p-4 border border-slate-700/50">
+              <p className="text-yellow-300 font-bold text-sm mb-2">🔑 Công thức nghiệm</p>
+              <div className="font-mono text-green-300 text-sm bg-slate-900/60 rounded-xl p-3 border border-slate-600/30">
+                <p>Δ = b² - 4ac</p>
+                <p className="mt-1">x₁,₂ = (-b ± √Δ) / 2a</p>
+              </div>
+            </div>
+            <div className="bg-slate-800/60 rounded-2xl p-4 border border-slate-700/50">
+              <p className="text-yellow-300 font-bold text-sm mb-2">📋 Định lý Viète</p>
+              <div className="font-mono text-green-300 text-sm bg-slate-900/60 rounded-xl p-3 border border-slate-600/30">
+                <p>x₁ + x₂ = -b/a</p>
+                <p className="mt-1">x₁ × x₂ = c/a</p>
+              </div>
+            </div>
+            <div className="bg-slate-800/60 rounded-2xl p-4 border border-slate-700/50">
+              <p className="text-yellow-300 font-bold text-sm mb-2">📊 Phân tích biệt thức Δ</p>
+              <div className="text-sm text-slate-300 space-y-1">
+                <p><span className="text-green-400 font-bold">Δ &gt; 0</span> → 2 nghiệm phân biệt</p>
+                <p><span className="text-blue-400 font-bold">Δ = 0</span> → nghiệm kép</p>
+                <p><span className="text-red-400 font-bold">Δ &lt; 0</span> → vô nghiệm thực</p>
+              </div>
+            </div>
+            <div className="bg-slate-800/60 rounded-2xl p-4 border border-slate-700/50">
+              <p className="text-yellow-300 font-bold text-sm mb-2">💡 Dạng tích phân tích</p>
+              <div className="font-mono text-green-300 text-sm bg-slate-900/60 rounded-xl p-3 border border-slate-600/30">
+                <p>ax² + bx + c =</p>
+                <p>a(x - x₁)(x - x₂)</p>
+              </div>
             </div>
           </div>
-        )}
-      </main>
+        </div>
 
-      {/* Footer */}
-      <footer className="text-center py-5 text-white/30 text-xs">
-        © 2025 Giải Phương Trình Bậc Hai · Được xây dựng bằng React + Tailwind CSS
-      </footer>
+        {/* Footer */}
+        <div className="text-center text-slate-500 text-sm py-4">
+          <p>🎓 Công cụ học tập Toán — Phương trình bậc hai</p>
+          <p className="mt-1">Áp dụng phương pháp Delta chuẩn SGK Toán Việt Nam</p>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes bounce {
+          from { transform: translateY(0); opacity: 0.5; }
+          to { transform: translateY(-10px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
